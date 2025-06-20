@@ -4,11 +4,7 @@ from .nodes import Nodes
 
 class Workflow:
     def __init__(self):
-        # Force rebuild of GraphState model to ensure it's fully defined
-        try:
-            GraphState.model_rebuild()
-        except Exception as e:
-            print(f"Warning: Could not rebuild GraphState model: {e}")
+        # GraphState is now a TypedDict, no need to rebuild models
         
         # initiate graph state & nodes
         workflow = StateGraph(GraphState)
