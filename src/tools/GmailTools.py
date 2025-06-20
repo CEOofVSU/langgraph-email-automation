@@ -4,10 +4,8 @@ import uuid
 import base64
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -153,22 +151,24 @@ class GmailToolsClass:
 
         return body
 
-        
     def _get_gmail_service(self):
-        creds = None
-        if os.path.exists('token.json'):
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                creds = flow.run_local_server(port=0)
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-        
-        return build('gmail', 'v1', credentials=creds)
-    
+        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
+        SERVICE_ACCOUNT_FILE = '/etc/secrets/google_credentials.json'
+
+        if os.path.exists(SERVICE_ACCOUNT_FILE):
+            creds = service_account.Credentials.from_service_account_file(
+                SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        else:
+            creds = service_account.Credentials.from_service_account_file(
+                'google_credentials.json', scopes=SCOPES)
+
+        try:
+            service = build('gmail', 'v1', credentials=creds)
+            return service
+        except Exception as e:
+            print(f"An error occurred building the Gmail service: {e}")
+            return None
+     
     def _should_skip_email(self, email_info):
         """Return True if the email was sent by the current user."""
         my_email = os.environ.get('MY_EMAIL')
