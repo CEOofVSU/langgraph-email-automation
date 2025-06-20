@@ -170,7 +170,11 @@ class GmailToolsClass:
         return build('gmail', 'v1', credentials=creds)
     
     def _should_skip_email(self, email_info):
-        return os.environ['MY_EMAIL'] in email_info['sender']
+        """Return True if the email was sent by the current user."""
+        my_email = os.environ.get('MY_EMAIL')
+        if not my_email:
+            return False
+        return my_email in email_info['sender']
 
     def _get_email_info(self, msg_id):
         message = self.service.users().messages().get(
