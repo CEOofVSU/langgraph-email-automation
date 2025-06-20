@@ -4,10 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from langserve import add_routes
 from src.graph import Workflow
 from dotenv import load_dotenv
+from pydantic import BaseModel
+from typing import Any, Dict
 
 # Load .env file
 load_dotenv()
-
 
 app = FastAPI(
     title="Gmail Automation",
@@ -25,14 +26,43 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-def get_runnable():
-    return  Workflow().app
+# Define simple input/output models to help with schema generation
+class WorkflowInput(BaseModel):
+    input: Dict[str, Any]
 
-# Fetch LangGraph Automation runnable which generates the workouts
+class WorkflowOutput(BaseModel):
+    output: Dict[str, Any]
+
+def get_runnable():
+    workflow = Workflow()
+    # Make sure all models are rebuilt
+    try:
+        # Force rebuild of any Pydantic models in your workflow
+        if hasattr(workflow, 'app'):
+            return workflow.app
+        return workflow
+    except Exception as e:
+        print(f"Error building workflow: {e}")
+        raise
+
+# Fetch LangGraph Automation runnable
 runnable = get_runnable()
 
 # Create the Fast API route to invoke the runnable
-add_routes(app, runnable)
+try:
+    add_routes(
+        app, 
+        runnable,
+        path="/gmail-automation",
+        include_callback_events=False,
+        enable_feedback_endpoint=False,
+        input_type=Dict[str, Any],  # Specify input type
+        output_type=Dict[str, Any], # Specify output type
+    )
+except Exception as e:
+    print(f"Error adding routes: {e}")
+    # Fallback: add routes with minimal configuration
+    add_routes(app, runnable)
 
 def main():
     # Start the API
