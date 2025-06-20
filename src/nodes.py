@@ -1,7 +1,7 @@
 from colorama import Fore, Style
 from .agents import Agents
 from .tools.GmailTools import GmailToolsClass
-from .state import GraphState, Email
+from .state import GraphState
 
 
 class Nodes:
@@ -13,8 +13,9 @@ class Nodes:
         """Loads new emails from Gmail and updates the state."""
         print(Fore.YELLOW + "Loading new emails...\n" + Style.RESET_ALL)
         recent_emails = self.gmail_tools.fetch_unanswered_emails()
-        emails = [Email(**email) for email in recent_emails]
-        return {"emails": emails}
+        # No need to convert with Email(**email) since we're using TypedDict now
+        # The gmail_tools already returns the correct format
+        return {"emails": recent_emails}
 
     def check_new_emails(self, state: GraphState) -> str:
         """Checks if there are new emails to process."""
@@ -32,9 +33,9 @@ class Nodes:
         """Categorizes the current email using the categorize_email agent."""
         print(Fore.YELLOW + "Checking email category...\n" + Style.RESET_ALL)
         
-        # Get the last email
+        # Get the last email - changed from current_email.body to current_email["body"]
         current_email = state["emails"][-1]
-        result = self.agents.categorize_email.invoke({"email": current_email.body})
+        result = self.agents.categorize_email.invoke({"email": current_email["body"]})
         print(Fore.MAGENTA + f"Email category: {result.category.value}" + Style.RESET_ALL)
         
         return {
@@ -56,7 +57,8 @@ class Nodes:
     def construct_rag_queries(self, state: GraphState) -> GraphState:
         """Constructs RAG queries based on the email content."""
         print(Fore.YELLOW + "Designing RAG query...\n" + Style.RESET_ALL)
-        email_content = state["current_email"].body
+        # Changed from state["current_email"].body to state["current_email"]["body"]
+        email_content = state["current_email"]["body"]
         query_result = self.agents.design_rag_queries.invoke({"email": email_content})
         
         return {"rag_queries": query_result.queries}
@@ -75,10 +77,10 @@ class Nodes:
         """Writes a draft email based on the current email and retrieved information."""
         print(Fore.YELLOW + "Writing draft email...\n" + Style.RESET_ALL)
         
-        # Format input to the writer agent
+        # Format input to the writer agent - changed from state["current_email"].body to state["current_email"]["body"]
         inputs = (
             f'# **EMAIL CATEGORY:** {state["email_category"]}\n\n'
-            f'# **EMAIL CONTENT:**\n{state["current_email"].body}\n\n'
+            f'# **EMAIL CONTENT:**\n{state["current_email"]["body"]}\n\n'
             f'# **INFORMATION:**\n{state["retrieved_documents"]}' # Empty for feedback or complaint
         )
         
@@ -105,8 +107,9 @@ class Nodes:
     def verify_generated_email(self, state: GraphState) -> GraphState:
         """Verifies the generated email using the proofreader agent."""
         print(Fore.YELLOW + "Verifying generated email...\n" + Style.RESET_ALL)
+        # Changed from state["current_email"].body to state["current_email"]["body"]
         review = self.agents.email_proofreader.invoke({
-            "initial_email": state["current_email"].body,
+            "initial_email": state["current_email"]["body"],
             "generated_email": state["generated_email"],
         })
 
