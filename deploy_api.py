@@ -1,95 +1,292 @@
-import uvicorn
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from langserve import add_routes
-from src.graph import Workflow
-from dotenv import load_dotenv
-from typing import Dict, Any
-import logging
+import os
+import re
+import uuid
+import base64
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
-# Load .env file
-load_dotenv()
+class GmailToolsClass:
+    def __init__(self):
+        self.service = self._get_gmail_service()
+        
+    def fetch_unanswered_emails(self, max_results=50):
+        """
+        Fetches all emails included in unanswered threads.
 
-app = FastAPI(
-    title="Gmail Automation",
-    version="1.0",
-    description="LangGraph backend for the AI Gmail automation workflow",
-    # Disable OpenAPI docs to avoid the schema generation error
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None
-)
+        @param max_results: Maximum number of recent emails to fetch
+        @return: List of dictionaries, each representing a thread with its emails
+        """
+        try:
+            # Get recent emails and organize them into threads
+            recent_emails = self.fetch_recent_emails(max_results)
+            if not recent_emails: return []
+            
+            # Get all draft replies
+            drafts = self.fetch_draft_replies()
 
-# Set all CORS enabled origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+            # Create a set of thread IDs that have drafts
+            threads_with_drafts = {draft['threadId'] for draft in drafts}
 
-def get_runnable():
-    """Get the LangGraph workflow runnable"""
-    try:
-        workflow = Workflow()
-        logger.info("Workflow created successfully")
-        return workflow.app
-    except Exception as e:
-        logger.error(f"Error creating workflow: {e}")
-        raise
+            # Process new emails
+            seen_threads = set()
+            unanswered_emails = []
+            for email in recent_emails:
+                thread_id = email['threadId']
+                if thread_id not in seen_threads and thread_id not in threads_with_drafts:
+                    seen_threads.add(thread_id)
+                    email_info = self._get_email_info(email['id'])
+                    if self._should_skip_email(email_info):
+                        continue
+                    unanswered_emails.append(email_info)
+            return unanswered_emails
 
-# Create a simple health check endpoint
-@app.get("/")
-async def root():
-    return {
-        "message": "Gmail Automation API is running!",
-        "status": "healthy",
-        "endpoints": {
-            "workflow": "/gmail-automation/invoke",
-            "playground": "/gmail-automation/playground",
-            "health": "/health"
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return []
+
+    def fetch_recent_emails(self, max_results=50):
+        try:
+            # Set delay of 8 hours
+            now = datetime.now()
+            delay = now - timedelta(hours=8)
+
+            # Format for Gmail query
+            after_timestamp = int(delay.timestamp())
+            before_timestamp = int(now.timestamp())
+
+            # Query to get emails from the last 8 hours
+            query = f"after:{after_timestamp} before:{before_timestamp}"
+            results = self.service.users().messages().list(
+                userId="me", q=query, maxResults=max_results
+            ).execute()
+            messages = results.get("messages", [])
+            
+            return messages
+        
+        except Exception as error:
+            print(f"An error occurred while fetching emails: {error}")
+            return []
+        
+    def fetch_draft_replies(self):
+        """
+        Fetches all draft email replies from Gmail.
+        """
+        try:
+            drafts = self.service.users().drafts().list(userId="me").execute()
+            draft_list = drafts.get("drafts", [])
+            return [
+                {
+                    "draft_id": draft["id"],
+                    "threadId": draft["message"]["threadId"],
+                    "id": draft["message"]["id"],
+                }
+                for draft in draft_list
+            ]
+
+        except Exception as error:
+            print(f"An error occurred while fetching drafts: {error}")
+            return []
+
+    def create_draft_reply(self, initial_email, reply_text):
+        try:
+            # Create the reply message
+            message = self._create_reply_message(initial_email, reply_text)
+
+            # Create draft with thread information
+            draft = self.service.users().drafts().create(
+                userId="me", body={"message": message}
+            ).execute()
+
+            return draft
+        except Exception as error:
+            print(f"An error occurred while creating draft: {error}")
+            return None
+
+    def send_reply(self, initial_email, reply_text):
+        try:
+            # Create the reply message
+            message = self._create_reply_message(initial_email, reply_text, send=True)
+
+            # Send the message with thread ID
+            sent_message = self.service.users().messages().send(
+                userId="me", body=message
+            ).execute()
+            
+            return sent_message
+
+        except Exception as error:
+            print(f"An error occurred while sending reply: {error}")
+            return None
+        
+    def _create_reply_message(self, email, reply_text, send=False):
+        # Create message with proper headers
+        # Changed from email.sender to email["sender"] (and same for other fields)
+        message = self._create_html_email_message(
+            recipient=email["sender"],
+            subject=email["subject"],
+            reply_text=reply_text
+        )
+
+        # Set threading headers
+        if email["messageId"]:
+            message["In-Reply-To"] = email["messageId"]
+            # Combine existing references with the original message ID
+            message["References"] = f"{email['references']} {email['messageId']}".strip()
+            
+            if send:
+                # Generate a new Message-ID for this reply
+                message["Message-ID"] = f"<{uuid.uuid4()}@gmail.com>"
+                
+        # Construct email body
+        body = {
+            "raw": base64.urlsafe_b64encode(message.as_bytes()).decode(),
+            "threadId": email["threadId"]
         }
-    }
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "Gmail Automation API"}
+        return body
 
-# Fetch LangGraph Automation runnable
-try:
-    runnable = get_runnable()
-    logger.info("Runnable obtained successfully")
+    def _get_gmail_service(self):
+        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
+        
+        # For Render deployment, you might need to store credentials differently
+        # Option 1: Use environment variable for credentials JSON
+        credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if credentials_json:
+            import json
+            import tempfile
+            # Create a temporary file with the credentials
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(json.loads(credentials_json), f)
+                credentials_file = f.name
+        else:
+            # Option 2: Check for local files
+            SERVICE_ACCOUNT_FILE = '/etc/secrets/google_credentials.json'
+            if os.path.exists(SERVICE_ACCOUNT_FILE):
+                credentials_file = SERVICE_ACCOUNT_FILE
+            else:
+                credentials_file = 'google_credentials.json'
+
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                credentials_file, scopes=SCOPES)
+            service = build('gmail', 'v1', credentials=creds)
+            return service
+        except Exception as e:
+            print(f"An error occurred building the Gmail service: {e}")
+            return None
+     
+    def _should_skip_email(self, email_info):
+        """Return True if the email was sent by the current user."""
+        my_email = os.environ.get('MY_EMAIL')
+        if not my_email:
+            return False
+        return my_email in email_info['sender']
+
+    def _get_email_info(self, msg_id):
+        """
+        Get email information and return it as a dictionary that matches our Email TypedDict structure.
+        """
+        message = self.service.users().messages().get(
+            userId="me", id=msg_id, format="full"
+        ).execute()
+
+        payload = message.get('payload', {})
+        headers = {header["name"].lower(): header["value"] for header in payload.get("headers", [])}
+
+        # Create email data dict that matches our Email TypedDict structure
+        email_data = {
+            "id": str(msg_id),
+            "threadId": str(message.get("threadId", "")),
+            "messageId": str(headers.get("message-id", "")),
+            "references": str(headers.get("references", "")),
+            "sender": str(headers.get("from", "Unknown")),
+            "subject": str(headers.get("subject", "No Subject")),
+            "body": str(self._get_email_body(payload)),
+        }
+        
+        return email_data
     
-    # Create the Fast API route to invoke the runnable
-    add_routes(
-        app, 
-        runnable,
-        path="/gmail-automation",
-        include_callback_events=False,
-        enable_feedback_endpoint=False,
-    )
-    logger.info("Routes added successfully")
-    
-except Exception as e:
-    logger.error(f"Error setting up routes: {e}")
-    
-    @app.post("/gmail-automation/invoke")
-    async def workflow_invoke_fallback():
-        return {"error": "Workflow not available due to initialization error", "details": str(e)}
+    def _get_email_body(self, payload):
+        """
+        Extract the email body, prioritizing text/plain over text/html.
+        Handles multipart messages, avoids duplicating content, and strips HTML if necessary.
+        """
+        def decode_data(data):
+            """Decode base64-encoded data."""
+            return base64.urlsafe_b64decode(data).decode('utf-8').strip() if data else ""
 
-def main():
-    # Start the API
-    print("🚀 Starting Gmail Automation API...")
-    print("📧 Workflow endpoint: http://localhost:8000/gmail-automation/invoke")
-    print("🎮 Playground: http://localhost:8000/gmail-automation/playground")
-    print("❤️ Health check: http://localhost:8000/health")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        def extract_body(parts):
+            """Recursively extract text content from parts."""
+            for part in parts:
+                mime_type = part.get('mimeType', '')
+                data = part['body'].get('data', '')
+                if mime_type == 'text/plain':
+                    return decode_data(data)
+                if mime_type == 'text/html':
+                    html_content = decode_data(data)
+                    return self._extract_main_content_from_html(html_content)
+                if 'parts' in part:
+                    result = extract_body(part['parts'])
+                    if result:
+                        return result
+            return ""
 
-if __name__ == "__main__":
-    main()
+        # Process single or multipart payload
+        if 'parts' in payload:
+            body = extract_body(payload['parts'])
+        else:
+            data = payload['body'].get('data', '')
+            body = decode_data(data)
+            if payload.get('mimeType') == 'text/html':
+                body = self._extract_main_content_from_html(body)
+
+        return self._clean_body_text(body)
+
+    def _extract_main_content_from_html(self, html_content):
+        """
+        Extract main visible content from HTML.
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        for tag in soup(['script', 'style', 'head', 'meta', 'title']):
+            tag.decompose()
+        return soup.get_text(separator='\n', strip=True)
+
+    def _clean_body_text(self, text):
+        """
+        Clean up the email body text by removing extra spaces and newlines.
+        """
+        return re.sub(r'\s+', ' ', text.replace('\r', '').replace('\n', '')).strip()
+    
+    def _create_html_email_message(self, recipient, subject, reply_text):
+        """
+        Creates a simple HTML email message with proper formatting and plaintext fallback.
+        """
+        message = MIMEMultipart("alternative")
+        message["to"] = recipient
+        message["subject"] = f"Re: {subject}" if not subject.startswith("Re: ") else subject
+
+        # Simplified HTML Template
+        html_text = reply_text.replace("\n", "<br>").replace("\\n", "<br>")
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body>{html_text}</body>
+        </html>
+        """
+
+        html_part = MIMEText(html_content, "html")
+
+        # message.attach(text_part)
+        message.attach(html_part)
+
+        return message
