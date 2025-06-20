@@ -9,7 +9,6 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-
 SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
 class GmailToolsClass:
@@ -127,17 +126,18 @@ class GmailToolsClass:
         
     def _create_reply_message(self, email, reply_text, send=False):
         # Create message with proper headers
+        # Changed from email.sender to email["sender"] (and same for other fields)
         message = self._create_html_email_message(
-            recipient=email.sender,
-            subject=email.subject,
+            recipient=email["sender"],
+            subject=email["subject"],
             reply_text=reply_text
         )
 
         # Set threading headers
-        if email.messageId:
-            message["In-Reply-To"] = email.messageId
+        if email["messageId"]:
+            message["In-Reply-To"] = email["messageId"]
             # Combine existing references with the original message ID
-            message["References"] = f"{email.references} {email.messageId}".strip()
+            message["References"] = f"{email['references']} {email['messageId']}".strip()
             
             if send:
                 # Generate a new Message-ID for this reply
@@ -146,7 +146,7 @@ class GmailToolsClass:
         # Construct email body
         body = {
             "raw": base64.urlsafe_b64encode(message.as_bytes()).decode(),
-            "threadId": email.threadId
+            "threadId": email["threadId"]
         }
 
         return body
@@ -177,6 +177,9 @@ class GmailToolsClass:
         return my_email in email_info['sender']
 
     def _get_email_info(self, msg_id):
+        """
+        Get email information and return it as a dictionary that matches our Email TypedDict structure.
+        """
         message = self.service.users().messages().get(
             userId="me", id=msg_id, format="full"
         ).execute()
@@ -184,15 +187,18 @@ class GmailToolsClass:
         payload = message.get('payload', {})
         headers = {header["name"].lower(): header["value"] for header in payload.get("headers", [])}
 
-        return {
-            "id": msg_id,
-            "threadId": message.get("threadId"),
-            "messageId": headers.get("message-id"),
-            "references": headers.get("references", ""),
-            "sender": headers.get("from", "Unknown"),
-            "subject": headers.get("subject", "No Subject"),
-            "body": self._get_email_body(payload),
+        # Create email data dict that matches our Email TypedDict structure
+        email_data = {
+            "id": str(msg_id),
+            "threadId": str(message.get("threadId", "")),
+            "messageId": str(headers.get("message-id", "")),
+            "references": str(headers.get("references", "")),
+            "sender": str(headers.get("from", "Unknown")),
+            "subject": str(headers.get("subject", "No Subject")),
+            "body": str(self._get_email_body(payload)),
         }
+        
+        return email_data
     
     def _get_email_body(self, payload):
         """
