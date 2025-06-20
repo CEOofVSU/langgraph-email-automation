@@ -41,13 +41,36 @@ async def root():
         "endpoints": {
             "workflow": "/gmail-automation/invoke",
             "playground": "/gmail-automation/playground",
-            "health": "/health"
+            "health": "/health",
+            "test": "/test"
         }
     }
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "Gmail Automation API"}
+
+@app.get("/test")
+async def test_endpoint():
+    return {
+        "message": "Test endpoint working!",
+        "available_endpoints": {
+            "workflow_invoke": "POST /gmail-automation/invoke",
+            "workflow_playground": "/gmail-automation/playground/",
+            "health": "GET /health",
+            "root": "GET /"
+        },
+        "test_payload_example": {
+            "input": {
+                "messages": [
+                    {
+                        "role": "user", 
+                        "content": "Check my unanswered emails"
+                    }
+                ]
+            }
+        }
+    }
 
 def get_runnable():
     """Get the LangGraph workflow runnable"""
@@ -58,6 +81,39 @@ def get_runnable():
     except Exception as e:
         logger.error(f"Error creating workflow: {e}")
         raise
+
+# Custom OpenAPI function that excludes LangServe routes from schema generation
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    from fastapi.openapi.utils import get_openapi
+    
+    # Only include our custom routes, exclude LangServe routes
+    custom_routes = []
+    for route in app.routes:
+        if hasattr(route, 'path') and not route.path.startswith('/gmail-automation'):
+            custom_routes.append(route)
+    
+    # Temporarily replace routes for schema generation
+    original_routes = app.routes
+    app.routes = custom_routes
+    
+    try:
+        openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=custom_routes,
+        )
+        app.openapi_schema = openapi_schema
+        return openapi_schema
+    finally:
+        # Restore original routes
+        app.routes = original_routes
+
+# Override the openapi method
+app.openapi = custom_openapi
 
 # Initialize the workflow and routes
 try:
