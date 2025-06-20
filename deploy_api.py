@@ -19,11 +19,7 @@ load_dotenv()
 app = FastAPI(
     title="Gmail Automation",
     version="1.0",
-    description="LangGraph backend for the AI Gmail automation workflow",
-    # Disable OpenAPI docs to avoid the schema generation error
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None
+    description="LangGraph backend for the AI Gmail automation workflow"
 )
 
 # Set all CORS enabled origins
