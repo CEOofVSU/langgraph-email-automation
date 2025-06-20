@@ -2,12 +2,18 @@ from langgraph.graph import END, StateGraph
 from .state import GraphState
 from .nodes import Nodes
 
-class Workflow():
+class Workflow:
     def __init__(self):
+        # Force rebuild of GraphState model to ensure it's fully defined
+        try:
+            GraphState.model_rebuild()
+        except Exception as e:
+            print(f"Warning: Could not rebuild GraphState model: {e}")
+        
         # initiate graph state & nodes
         workflow = StateGraph(GraphState)
         nodes = Nodes()
-
+        
         # define all graph nodes
         workflow.add_node("load_inbox_emails", nodes.load_new_emails)
         workflow.add_node("is_email_inbox_empty", nodes.is_email_inbox_empty)
@@ -18,10 +24,10 @@ class Workflow():
         workflow.add_node("email_proofreader", nodes.verify_generated_email)
         workflow.add_node("send_email", nodes.create_draft_response)
         workflow.add_node("skip_unrelated_email", nodes.skip_unrelated_email)
-
+        
         # load inbox emails
         workflow.set_entry_point("load_inbox_emails")
-
+        
         # check if there are emails to process
         workflow.add_edge("load_inbox_emails", "is_email_inbox_empty")
         workflow.add_conditional_edges(
@@ -32,7 +38,7 @@ class Workflow():
                 "empty": END
             }
         )
-
+        
         # route email based on category
         workflow.add_conditional_edges(
             "categorize_email",
@@ -43,13 +49,16 @@ class Workflow():
                 "unrelated": "skip_unrelated_email"
             }
         )
-
+        
         # pass constructed queries to RAG chain to retrieve information
         workflow.add_edge("construct_rag_queries", "retrieve_from_rag")
+        
         # give information to writer agent to create draft email
         workflow.add_edge("retrieve_from_rag", "email_writer")
+        
         # proofread the generated draft email
         workflow.add_edge("email_writer", "email_proofreader")
+        
         # check if email is sendable or not, if not rewrite the email
         workflow.add_conditional_edges(
             "email_proofreader",
@@ -60,10 +69,15 @@ class Workflow():
                 "stop": "categorize_email"
             }
         )
-
+        
         # check if there are still emails to be processed
         workflow.add_edge("send_email", "is_email_inbox_empty")
-        workflow.add_edge("skip_unrelated_email", "is_email_inbox_empty" )
-
+        workflow.add_edge("skip_unrelated_email", "is_email_inbox_empty")
+        
         # Compile
-        self.app = workflow.compile()
+        try:
+            self.app = workflow.compile()
+        except Exception as e:
+            print(f"Error compiling workflow: {e}")
+            # Try compiling with checkpointer disabled if there are issues
+            self.app = workflow.compile(checkpointer=None)
