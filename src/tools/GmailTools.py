@@ -153,16 +153,28 @@ class GmailToolsClass:
 
     def _get_gmail_service(self):
         SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-        SERVICE_ACCOUNT_FILE = '/etc/secrets/google_credentials.json'
-
-        if os.path.exists(SERVICE_ACCOUNT_FILE):
-            creds = service_account.Credentials.from_service_account_file(
-                SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        
+        # For Render deployment, you might need to store credentials differently
+        # Option 1: Use environment variable for credentials JSON
+        credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if credentials_json:
+            import json
+            import tempfile
+            # Create a temporary file with the credentials
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(json.loads(credentials_json), f)
+                credentials_file = f.name
         else:
-            creds = service_account.Credentials.from_service_account_file(
-                'google_credentials.json', scopes=SCOPES)
+            # Option 2: Check for local files
+            SERVICE_ACCOUNT_FILE = '/etc/secrets/google_credentials.json'
+            if os.path.exists(SERVICE_ACCOUNT_FILE):
+                credentials_file = SERVICE_ACCOUNT_FILE
+            else:
+                credentials_file = 'google_credentials.json'
 
         try:
+            creds = service_account.Credentials.from_service_account_file(
+                credentials_file, scopes=SCOPES)
             service = build('gmail', 'v1', credentials=creds)
             return service
         except Exception as e:
