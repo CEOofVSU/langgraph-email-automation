@@ -93,7 +93,7 @@ This is the detailed flow of the system:
 
 4. **Set up environment variables:**
 
-   Create a `.env` file in the root directory of the project and add your GMAIL address, we are using the Groq llama-3.1-70b model and the Google gemini embedding model so you must also get API keys to access them:
+   Create a `.env` file in the root directory of the project and add your GMAIL address, we are using the Groq llama-3.3-70b-versatile model and the Google gemini embedding model so you must also get API keys to access them:
 
    ```env
    MY_EMAIL=your_email@gmail.com
